@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"sync/atomic"
 )
 
@@ -26,39 +27,43 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 func (cfg *apiConfig) requestCount(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = fmt.Fprintf(w, "Hits: %v", cfg.fileserverHits.Load())
+	_, _ = fmt.Fprintf(w, "Hits: %d\n", cfg.fileserverHits.Load())
 
 }
 
 func (cfg *apiConfig) resetCount(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func main() {
-	const port = "8080"
-
-	apiCfg := apiConfig{
-		fileserverHits: atomic.Int32{},
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
 	}
+
+	apiCfg := &apiConfig{}
 
 	mux := http.NewServeMux()
 
 	fileServer := apiCfg.middlewareMetricsInc(
 		http.FileServer(http.Dir("./app")),
 	)
-	mux.Handle("/app/", http.StripPrefix("/app/", fileServer))
+	mux.Handle("GET /app/", http.StripPrefix("/app/", fileServer))
 
-	mux.HandleFunc("/healthz", healthzHandler)
+	mux.HandleFunc("GET /healthz", healthzHandler)
 
-	mux.HandleFunc("/metrics", apiCfg.requestCount)
+	mux.HandleFunc("GET /metrics", apiCfg.requestCount)
 
-	mux.HandleFunc("/reset", apiCfg.resetCount)
+	mux.HandleFunc("POST /reset", apiCfg.resetCount)
 
 	server := http.Server{
 		Addr:    ":" + port,
 		Handler: mux,
 	}
 
-	fmt.Printf("Server lisenting on port %s\n", port)
-	log.Fatal(server.ListenAndServe())
+	log.Printf("Server listening on port %s", port)
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatal(err)
+	}
 }
